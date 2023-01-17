@@ -10,6 +10,8 @@ from .hash_info import HashInfo
 from .istextfile import DEFAULT_CHUNK_SIZE, istextblock
 from .meta import Meta
 
+from .zfang_gol import zfang_gol
+import time
 logger = logging.getLogger(__name__)
 
 
@@ -83,6 +85,7 @@ def fobj_md5(
     text: Optional[bool] = None,
     name="md5",
 ) -> str:
+    # hash_s2 = time.time()
     # ideally, we want the heuristics to be applied in a similar way,
     # regardless of the size of the first chunk,
     # for which we may need to buffer till DEFAULT_CHUNK_SIZE.
@@ -92,6 +95,9 @@ def fobj_md5(
         data = stream.read(chunk_size)
         if not data:
             break
+    # hash_e2 = time.time()
+    # zfang_gol.set_value("file_md5", zfang_gol.get_value("file_md5") + (hash_e2 - hash_s2))
+    
     return stream.hash_value
 
 
@@ -114,6 +120,7 @@ def _hash_file(
     name: str,
     callback: "Callback" = DEFAULT_CALLBACK,
 ) -> Tuple["str", Meta]:
+    # hash_s1 = time.time()
     meta = Meta.from_info(fs.info(path), fs.protocol)
 
     value = getattr(meta, name, None)
@@ -124,7 +131,9 @@ def _hash_file(
     if hasattr(fs, name):
         func = getattr(fs, name)
         return str(func(path)), meta
-
+    # hash_e1 = time.time()
+    # zfang_gol.set_value("file_meta", zfang_gol.get_value("file_meta") + (hash_e1 - hash_s1))
+    
     if name == "md5":
         return file_md5(path, fs, callback=callback), meta
     raise NotImplementedError
@@ -162,17 +171,28 @@ def hash_file(
     state: "StateBase" = None,
     callback: "Callback" = None,
 ) -> Tuple["Meta", "HashInfo"]:
+    # hash_file_s1 = time.time()
     if state:
         meta, hash_info = state.get(path, fs)
         if hash_info:
             return meta, hash_info
 
     cb = callback or LargeFileHashingCallback(desc=path)
+    # hash_file_e1 = time.time()
+    # zfang_gol.set_value("other_db_time", zfang_gol.get_value("other_db_time") + (hash_file_e1 - hash_file_s1))
+    
+    # hash_file_s2 = time.time()
     with cb:
         hash_value, meta = _hash_file(path, fs, name, callback=cb)
     hash_info = HashInfo(name, hash_value)
-    if state:
-        assert ".dir" not in hash_info.value
-        state.save(path, fs, hash_info)
-
+    # hash_file_e2 = time.time()
+    # zfang_gol.set_value("hash_file_time", zfang_gol.get_value("hash_file_time") + (hash_file_e2 - hash_file_s2))
+    
+    # hash_file_s3 = time.time()
+    # if state: #dvc 源码
+    #     assert ".dir" not in hash_info.value
+    #     state.save(path, fs, hash_info)
+    # hash_file_e3 = time.time()
+    # zfang_gol.set_value("db_add_time", zfang_gol.get_value("db_add_time") + (hash_file_e3 - hash_file_s3))
+    
     return meta, hash_info
