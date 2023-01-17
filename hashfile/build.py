@@ -19,12 +19,14 @@ if TYPE_CHECKING:
 
 from datetime import datetime
 import math
-from multiprocessing import Process
+from multiprocessing import Process, Manager
 from .istextfile import DEFAULT_CHUNK_SIZE, istextblock
 from .hash_info import HashInfo
 from dvc_objects.fs.callbacks import DEFAULT_CALLBACK, Callback, TqdmCallback
 import io
 from typing import BinaryIO
+import time
+from .zfang_gol import zfang_gol
 
 DefaultIgnoreFile = ".dvcignore"
 
@@ -67,22 +69,40 @@ def _upload_file(from_path, fs, odb, upload_odb, callback=None):
     meta = Meta(size=size)
     return meta, odb.get(oid)
 
-
+t_build_file1_total = 0.0
+t_build_file2_total = 0.0
+zfang_gol._init()
+zfang_gol.set_value("db_add_time", 0.0)
+zfang_gol.set_value("hash_file_time", 0.0)
+zfang_gol.set_value("other_db_time", 0.0)
+zfang_gol.set_value("file_meta", 0.0)
+zfang_gol.set_value("file_md5", 0.0)
 def _build_file(path, fs, name, odb=None, upload_odb=None, dry_run=False):
+    _build_file1_s = time.time()
     state = odb.state if odb else None
     meta, hash_info = hash_file(path, fs, name, state=state)
+    _build_file1_e = time.time()
+    global t_build_file1_total
+    t_build_file1_total += (_build_file1_e - _build_file1_s)
+    
+    # _build_file2_s = time.time()
     if upload_odb and not dry_run:
         assert odb and name == "md5"
         return _upload_file(path, fs, odb, upload_odb)
 
-    oid = hash_info.value
-    if dry_run:
-        obj = HashFile(path, fs, hash_info)
-    else:
-        odb.add(path, fs, oid, hardlink=False) #dvc数据库操作，log by zhoufang 20230111
-        obj = odb.get(oid)
+    # oid = hash_info.value
+    # if dry_run:
+    #     obj = HashFile(path, fs, hash_info)
+    # else:
+    #     odb.add(path, fs, oid, hardlink=False)
+    #     obj = odb.get(oid)
 
-    return meta, obj
+    # _build_file2_e = time.time()
+    # global t_build_file2_total
+    # t_build_file2_total += (_build_file2_e - _build_file2_s)
+    
+    # return meta, obj
+    return meta, hash_info #测试代码20230117
 
 # start create by zhoufang, date 20230111
 class LargeFileHashingCallback(TqdmCallback):
@@ -224,7 +244,7 @@ def _build_file_speed(path, fs, name, odb=None, upload_odb=None, dry_run=False):
 
 
 def slice_fnames(process_jobs, fnames_list ):  
-    print("build()开启的进程数目为：", process_jobs)
+    print("\n build()开启的进程数目为：", process_jobs)
     fnames_list_length = len(fnames_list)
     n = process_jobs
     
@@ -233,7 +253,7 @@ def slice_fnames(process_jobs, fnames_list ):
         one_thread_list = fnames_list[math.floor(i / n * fnames_list_length): math.floor((i + 1) / n * fnames_list_length)]
         one_thread_set = set(one_thread_list)
         fnames_slice_list.append(one_thread_set)
-    print("主进程成功获取所有文件名字，fnames_slice_list文件对象的切片数目：", len(fnames_slice_list))
+    # print("\n 主进程成功获取所有文件名字，fnames_slice_list文件对象的切片数目：", len(fnames_slice_list))
     
     return fnames_slice_list
 
@@ -277,7 +297,7 @@ def _build_tree(
     except ValueError:
         # NOTE: relpath might not exist
         relpath = path
-    # t1 = datetime.now()
+
     with Tqdm(
         unit="obj",
         desc=f"New debug func: Building data objects from {relpath}",
@@ -295,54 +315,105 @@ def _build_tree(
             if root != path:
                 rel_key = tuple(root[len(path) + 1 :].split(fs.sep))
 
-            for fname in fnames: # add by zhoufang in 20230106,for循环可以并行加速遍历fnames
-                if fname == "":
-                    # NOTE: might happen with s3/gs/azure/etc, where empty
-                    # objects like `dir/` might be used to create an empty dir
-                    continue
+            t_build_total = 0.0
+            t_other_total = 0.0
+            # global_info_list = []
+            # for fname in fnames: # add by zhoufang in 20230106, dvc 原始代码的for循环，可以并行加速遍历fnames
+            #     if fname == "":
+            #         # NOTE: might happen with s3/gs/azure/etc, where empty
+            #         # objects like `dir/` might be used to create an empty dir
+            #         continue
 
-                pbar.update()
-                meta, obj = _build_file(
-                    f"{root}{fs.sep}{fname}", fs, name, odb=odb, **kwargs
-                )
-                key = (*rel_key, fname)
-                tree.add(key, meta, obj.hash_info)
-                tree_meta.size += meta.size or 0
-                tree_meta.nfiles += 1
+            #     pbar.update()
+            #     t_s = time.time()
+            #     file_path = f"{root}{fs.sep}{fname}"
+            #     # meta, obj = _build_file( 
+            #     #     f"{root}{fs.sep}{fname}", fs, name, odb=odb, **kwargs
+            #     # )
+            #     meta, hash_info = _build_file( #拆出db操作，测试代码
+            #         f"{root}{fs.sep}{fname}", fs, name, odb=odb, **kwargs
+            #     )
+            #     t_e = time.time()
+            #     t_build_total += (t_e - t_s)
+                
+            #     s_2 = time.time()
+            #     key = (*rel_key, fname)
+            #     # tree.add(key, meta, obj.hash_info) 
+            #     tree.add(key, meta, hash_info) #拆出db操作，测试代码
+            #     tree_meta.size += meta.size or 0
+            #     tree_meta.nfiles += 1
+                
+            #     temTuple = (fname, meta, file_path, hash_info) #拆出db操作，测试代码
+            #     # temTuple = (fname, meta, file_path, obj.hash_info) 
+            #     global_info_list.append(temTuple)
+            #     s_3 = time.time()
+            #     t_other_total += (s_3 - s_2)
             
-            # 改进比对操作为目标函数，start create by zhoufang at 20221226  
-            # def target_func(fnames_list):
-            #     for fname in fnames_list: # add by zhoufang in 20230106,for循环可以并行加速遍历fnames
-            #         if fname == "":
-            #             # NOTE: might happen with s3/gs/azure/etc, where empty
-            #             # objects like `dir/` might be used to create an empty dir
-            #             continue
+            
+            # 改进比对操作为目标函数，start create by zhoufang at 20230117 
+            def target_func(fnames_list, global_info_list):
+                for fname in fnames_list: # add by zhoufang in 20230106,for循环可以并行加速遍历fnames
+                    if fname == "":
+                        # NOTE: might happen with s3/gs/azure/etc, where empty
+                        # objects like `dir/` might be used to create an empty dir
+                        continue
+                    pbar.update()
+                    file_path = f"{root}{fs.sep}{fname}"
+                    meta, hash_info = _build_file(
+                        f"{root}{fs.sep}{fname}", fs, name, odb=odb, **kwargs
+                    )      
+                    temTuple = (fname, meta, file_path, hash_info)
+                    global_info_list.append(temTuple)
+            
+            fnames_slice_list = slice_fnames(8, fnames) 
+            manager = Manager()
+            global_info_list = manager.list()
+            process_list = []
+            
+            for i in range(8):
+                t = Process(target=target_func, args=(fnames_slice_list[i], global_info_list,))
+                t.start()
+                process_list.append(t) 
+            for t in process_list:
+                t.join()
+            
+            
+            # 数据库插入元数据操作，拆为如下for循环
+            t_db_total = 0.0
+            t_odb_total = 0.0
+            if len(global_info_list) != 0:
+                for (fname, meta, path, hash_info) in global_info_list:
+                    odb_s = time.time() 
+                    key = (*rel_key, fname)
+                    tree.add(key, meta, hash_info)
+                    tree_meta.size += meta.size or 0
+                    tree_meta.nfiles += 1
+                    
+                    odb.add(path, fs, hash_info.value, hardlink=False)
+                    odb_e = time.time()
+                    t_odb_total += (odb_e - odb_s)
+                    
+                    db_s = time.time()                    
+                    state = odb.state if odb else None
+                    if state:
+                        assert ".dir" not in hash_info.value
+                        state.save(path, fs, hash_info)
+                    db_e = time.time()
+                    t_db_total += (db_e - db_s)
+            
+            
+            # print("\n-------------------\n")
+            print("success in _build_tree(), foreach _build_file() mate calculate total time  #", t_build_total)
+            print("success in _build_tree(), foreach other _build_file() mate calculate time #", t_other_total)
+            print("success in hash_file(), separate meta db func, db insert op total time   |= ", t_db_total)
+            print("success in hash_file(), separate meta db func, other db op total time    |= ", t_odb_total)
+            t_db_total = 0.0
+            t_odb_total = 0.0
+            
+            # print("success in hash_file(), op3 of hash_file, db insert op time  |== ", zfang_gol.get_value("db_add_time"))
+            # zfang_gol.set_value("db_add_time", 0.0)
 
-            #         pbar.update()
-            #         meta, obj = _build_file(
-            #             f"{root}{fs.sep}{fname}", fs, name, odb=odb, **kwargs
-            #         )
-            #         key = (*rel_key, fname)
-            #         tree.add(key, meta, obj.hash_info)
-            #         tree_meta.size += meta.size or 0
-            #         tree_meta.nfiles += 1
-            
-            # fnames_slice_list = slice_fnames(6, fnames) 
-            # time1 = datetime.now()
-            # print("build并行加速遍历fnames操作, starting ...")
-            # process_list = []
-            # for i in range(6):
-            #     t = Process(target=target_func, args=(fnames_slice_list[i], ))
-            #     t.start()
-            #     process_list.append(t) 
-            # for t in process_list:
-            #     t.join()
-        
-            # time2 = datetime.now()
-            # print("build并行进程池操作, 主进程执行的总时间：", time2 - time1)
-    # t2 = datetime.now()
-    # print("success call in _build_tree, the core is foreach _build_file(),cost_time:", (t2 - t1))
-    
+            # print("\n-------------------\n")
     tree.digest()
     tree = add_update_tree(odb, tree)
     return tree_meta, tree
