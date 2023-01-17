@@ -84,17 +84,13 @@ def _do_transfer(
     # print("success call in _do_tansfer(), | otransfer step1 time={}".format(do_transfer_step1_time))
 
     for dir_hash in dir_ids:
-        # t3 = datetime.now()
         dir_obj = find_tree_by_obj_id([cache_odb, src], dir_hash)
-        # t4 = datetime.now()
-        # do_transfer_step2_time = t4-t3
         
         assert dir_obj
 
         entry_ids = {oid for _, _, oid in dir_obj}
         bound_file_ids = all_file_ids & entry_ids
         all_file_ids -= entry_ids
-        # print("success call in _do_tansfer(), | otransfer step2 time={}".format(do_transfer_step2_time))
 
         dir_fails = sum(processor(bound_file_ids))
         if dir_fails:
@@ -169,13 +165,9 @@ def transfer(
     if src == dest:
         return 0
 
-    t1 = datetime.now()
     status = compare_status(
         src, dest, obj_ids, check_deleted=False, jobs=jobs, **kwargs
     )
-    t2 = datetime.now()
-    time_compare_status = t2-t1
-    print("success call in self.transfer(), other step: self.time_compare_status={}".format(time_compare_status))
 
     if validate_status:
         validate_status(status)
