@@ -18,8 +18,6 @@ if TYPE_CHECKING:
     from .tree import Tree
 
 
-from datetime import datetime
-
 logger = logging.getLogger(__name__)
 
 
@@ -57,7 +55,7 @@ def find_tree_by_obj_id(
     for odb in odbs:
         if odb is not None:
             try:
-                return Tree.load(odb, obj_id) #tree该过程耗时
+                return Tree.load(odb, obj_id)
             except (FileNotFoundError, ObjectFormatError):
                 pass
     return None
@@ -74,14 +72,11 @@ def _do_transfer(
     cache_odb: Optional["ObjectDB"] = None,
     **kwargs: Any,
 ):
-    # t1 = datetime.now()
+
     dir_ids, file_ids = split(lambda hash_info: hash_info.isdir, obj_ids)
     total_fails = 0
     succeeded_dir_objs = []
     all_file_ids = set(file_ids)
-    # t2 = datetime.now()
-    # do_transfer_step1_time = t2-t1
-    # print("success call in _do_tansfer(), | otransfer step1 time={}".format(do_transfer_step1_time))
 
     for dir_hash in dir_ids:
         dir_obj = find_tree_by_obj_id([cache_odb, src], dir_hash)
@@ -185,7 +180,8 @@ def transfer(
     #         hardlink=hardlink,
     #     )
     
-    def func_speed(hash_info: "HashInfo") -> None:  # add get workspace img_item, zhoufang 20221205
+    # Rewritten as an objective function for multi-process parallel acceleration, add by zhoufang in 20221205
+    def func_speed(hash_info: "HashInfo") -> None:  
         obj = src.get(hash_info.value)
         if  obj.path.startswith("memory:"):
             print("success find the memory path:", obj.path)
