@@ -1,6 +1,5 @@
 import logging
 from itertools import chain
-# from typing import TYPE_CHECKING, List, Optional
 
 from dvc_objects.fs.callbacks import Callback
 from dvc_objects.fs.generic import test_links, transfer
@@ -13,7 +12,7 @@ from datetime import datetime
 from shutil import copyfile
 from attrs import asdict, define, field
 import reprlib
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple, Dict
 
 if TYPE_CHECKING:
     from .hashfile._ignore import Ignore
@@ -130,7 +129,7 @@ def _checkout_file(
 
     return modified
 
-#zhoufang add start
+#zhoufang add funcs start
 @define(hash=True, order=True)
 class TreeEntry:
     in_cache: bool = field(default=False, eq=False)
@@ -179,9 +178,9 @@ class DiffResult:
     @property
     def stats(self) -> Dict[str, int]:
         return {k: len(v) for k, v in asdict(self).items()}
-#zhoufang add end
+#zhoufang add funcs end
  
-# create by zhoufang, date 20221223
+# create new func by zhoufang, date 20221223
 def slice_keys(process_jobs, old_keys, new_keys ):  
     src_old_keys = list(old_keys)
     src_new_keys = list(new_keys)
@@ -206,10 +205,7 @@ def slice_keys(process_jobs, old_keys, new_keys ):
     
     return old_keys_list, new_keys_list
 
-
-
-
-# create by zhoufang, date 20221223
+# create new func by zhoufang, date 20221223
 def speed_diff(
     path,
     fs,
@@ -282,7 +278,6 @@ def speed_diff(
     
     # 改进比对操作为目标函数，start create by zhoufang at 20221226
     def target_func(old_keys_slice, new_keys_slice):
-        t1 = datetime.now()
         local_process_ret = DiffResult()
         for key in old_keys_slice | new_keys_slice:
             old_meta, old_oid = _get(old, key)
@@ -321,12 +316,7 @@ def speed_diff(
                 )
             failed.append(path)
             
-        t2 = datetime.now()
-        time_diff = t2-t1
-        print("success call in speed_diff() step2: [工作区和缓存区 元数据对比diff操作时间] #{}".format(time_diff))
-
         try:
-            t3 = datetime.now()
             _checkout(
                 local_process_ret,
                 path,
@@ -337,10 +327,7 @@ def speed_diff(
                 state=state,
                 prompt=prompt,
             )
-            t4 = datetime.now()
-            time_checkout = t4-t3
-            print("success call in speed_diff() step3: [根据数据diff差异列表,遍历进行checkout恢复数据操作时间] ${}". format(time_checkout))
-
+            
         except CheckoutError as exc:
             failed.extend(exc.paths)
 
@@ -352,23 +339,19 @@ def speed_diff(
             return
     # 改进比对操作为目标函数，end create by zhoufang at 20221226
     
-    old_keys_slice_list, new_keys_slice_list = slice_keys(36, old_keys, new_keys) 
+    old_keys_slice_list, new_keys_slice_list = slice_keys(6, old_keys, new_keys) 
           
-    time1 = datetime.now()
     print("odiff并行加速对比操作, starting ...")
     process_list = []
-    for i in range(36):
+    for i in range(6):
         t = Process(target=target_func, args=(old_keys_slice_list[i], new_keys_slice_list[i], ))
         t.start()
         process_list.append(t) 
     for t in process_list:
         t.join()
         
-    time2 = datetime.now()
-    print("odiff并行进程池操作, 主进程执行的总时间：", time2 - time1)
 
-
-def _diff(
+def _diff( #dvc原始代码
     path,
     fs,
     obj,
@@ -376,7 +359,7 @@ def _diff(
     relink=False,
     ignore: Optional["Ignore"] = None,
 ):
-    # t_0 = datetime.now()
+    
     old = None
     try:
         _, _, old = build(
@@ -389,10 +372,7 @@ def _diff(
         )
     except FileNotFoundError:
         pass
-    # t_1 = datetime.now()
-    # time_diff = t_1 - t_0
-    # print("success call in _diff() step1.0: [工作区和缓存区 元数据获取操作, _build()] #{}".format(time_diff))
-
+    
     diff = odiff(old, obj, cache)
     
     if relink:
@@ -418,8 +398,7 @@ class Link:
         parent = to_fs.path.parent(to_path)
         to_fs.makedirs(parent)
         try:
-            # copyfile(from_path, to_path) # add by zhoufang 20221208
-            with Callback.as_tqdm_callback( #dvc源码
+            with Callback.as_tqdm_callback(
                 callback,
                 desc=cache.fs.path.name(from_path),
                 bytes=True,
@@ -436,32 +415,7 @@ class Link:
         except FileNotFoundError as exc:
             raise CheckoutError([to_path]) from exc
         except OSError as exc:
-            raise LinkError(to_path) from exc
-
-
-def slice_datas(process_jobs, diff_added_list, diff_modified_list  ): # create by zhoufang 20221208  
-    src_added_global_list = diff_added_list
-    src_diff_modified_list = diff_modified_list
-    print("开启的进程数目为：", process_jobs)
-    added_length = len(src_added_global_list)
-    modified_length = len(src_diff_modified_list)
-    
-    n = process_jobs
-    
-    added_global_list = []
-    for i in range(n):
-        one_thread_list = src_added_global_list[math.floor(i / n * added_length): math.floor((i + 1) / n * added_length)]
-        added_global_list.append(one_thread_list)
-    print("主进程成功获取所有文件图片，added_global_list写文件的切片数目：", len(added_global_list))
-    
-    modified_global_list = []
-    for i in range(n):
-        one_slice_list = src_diff_modified_list[math.floor(i / n * modified_length): math.floor((i + 1) / n * modified_length)]
-        modified_global_list.append(one_slice_list)
-    print("主进程成功获取所有文件图片，modified_global_list写文件的切片数目：", len(modified_global_list))
-    
-    return added_global_list, modified_global_list
-    
+            raise LinkError(to_path) from exc 
 
 def _checkout(
     diff,
@@ -520,54 +474,7 @@ def _checkout(
             failed.extend(exc.paths)
 
     if failed:
-        raise CheckoutError(failed) #dvc源码
-    
-    # 优化方案二：并行进程加速转储部分，create by zhoufang 20221208 ,start
-    # def target_func(diff_added_slice, diff_modified_slice):
-    #     for change in chain(diff_added_slice, diff_modified_slice):
-    #         entry_path = (
-    #             fs.path.join(path, *change.new.key)
-    #             if change.new.key != ROOT
-    #             else path
-    #         )
-    #         if change.new.oid.isdir:
-    #             fs.makedirs(entry_path)
-    #             continue
-
-    #         try:
-    #             _checkout_file(
-    #                 link,
-    #                 entry_path,
-    #                 fs,
-    #                 change,
-    #                 cache,
-    #                 force,
-    #                 relink,
-    #                 state=state,
-    #                 prompt=prompt,
-    #             )
-    #             if progress_callback:
-    #                 progress_callback(entry_path)
-    #         except CheckoutError as exc:
-    #             failed.extend(exc.paths)
-    
-    # added_global_list, modified_global_list = slice_datas(fs.jobs, diff.added, diff.modified) 
-         
-    # time1 = datetime.now()
-    # process_list = []
-    # for i in range(fs.jobs):
-    #     t = Process(target=target_func, args=(added_global_list[i], modified_global_list[i], ))
-    #     t.start()
-    #     process_list.append(t)
-    # for t in process_list:
-    #     t.join()
-    
-    # time2 = datetime.now()
-    # print("主进程执行的总时间：", time2 - time1)
-    # if failed:
-    #     raise CheckoutError(failed)
-    # create by zhoufang end 
-    
+        raise CheckoutError(failed)
     
 def checkout(
     path,
@@ -586,7 +493,7 @@ def checkout(
     #    raise NotImplementedError
     
     # t1 = datetime.now()
-    # diff = _diff( #dvc源码
+    # diff = _diff( #dvc源码，调用_diff比对函数
     #     path,
     #     fs,
     #     obj,
@@ -594,7 +501,7 @@ def checkout(
     #     relink=relink,
     #     ignore=ignore,
     # ) #dvc源码
-    speed_diff( #dvc最新加速版本
+    speed_diff( #dvc版本切换场景，最新优化版本的比对函数
         path,
         fs,
         obj,
@@ -610,7 +517,8 @@ def checkout(
     if state:
         state.save_link(path, fs)
     
-    # failed = [] #dvc源码
+    # dvc源码部分start
+    # failed = [] 
     # if not obj:
     #     if not quiet:
     #         logger.warning(
@@ -618,13 +526,7 @@ def checkout(
     #             path,
     #         )
     #     failed.append(path)
-        
-    # t2 = datetime.now()
-    # time_diff = t2-t1
-    # print("success call in self.checkout() step1.1: [工作区和缓存区 元数据对比_diff操作时间] #{}".format(time_diff))
-
     # try:
-    #     t3 = datetime.now()
     #     _checkout(
     #         diff,
     #         path,
@@ -636,14 +538,9 @@ def checkout(
     #         state=state,
     #         prompt=prompt,
     #     )
-    #     t4 = datetime.now()
-    #     time_checkout = t4-t3
-    #     print("success call in self.checkout() step2: [根据数据diff差异列表,遍历进行checkout恢复数据操作时间] ${}". format(time_checkout))
-
     # except CheckoutError as exc:
     #     failed.extend(exc.paths)
 
-    # t5 = datetime.now()
     # if diff and state:
     #     state.save_link(path, fs)
 
@@ -653,12 +550,8 @@ def checkout(
     #     if failed:
     #         raise CheckoutError(failed)
     #     return
-
-    # t6 = datetime.now()
-    # time_state = t6-t5
-    # print("success call in self.checkout() step3, [数据对比的目标和缓存根目录 映射操作时间] %{}". format(time_state))
-    
-    # return bool(diff) and not relink #dvc源码
+    # return bool(diff) and not relink
+    # dvc源码部分 end
     return not relink #speed_diff
 
 
