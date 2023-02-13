@@ -210,12 +210,11 @@ def _build_tree(
                             break
                     if state: #dvc 源码
                         assert ".dir" not in hash_info.value
-                        t3 = time.time()
-                        # state.save(path, fs, hash_info)  
-                        state.save_many(path, fs, hash_info) 
+                        t3 = time.time() 
+                        state.save_batch(path, fs, hash_info) 
                         t4 = time.time()  
                         t_sqlite += (t4-t3)    
-                state.commit_many()
+                state.commit_batch()
                 t6 = datetime.now()  
                 print("_build_tree() 的for循环中,state.save的操作总时间      =", t_sqlite)
                 print("_build_tree() 的for循环中,state.save的other   sqlite3=", zfang_gol.get_value("hash_store"))

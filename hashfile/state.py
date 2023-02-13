@@ -12,8 +12,6 @@ from dvc_objects.fs.utils import relpath
 from .hash_info import HashInfo
 from .utils import get_mtime_and_size
 
-from .zfang_gol import zfang_gol
-import time
 
 if TYPE_CHECKING:
     from ._ignore import Ignore
