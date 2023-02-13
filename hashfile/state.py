@@ -12,6 +12,9 @@ from dvc_objects.fs.utils import relpath
 from .hash_info import HashInfo
 from .utils import get_mtime_and_size
 
+from .zfang_gol import zfang_gol
+import time
+
 if TYPE_CHECKING:
     from ._ignore import Ignore
 
@@ -94,7 +97,6 @@ class State(StateBase):  # pylint: disable=too-many-instance-attributes
             path (str): path to save hash for.
             hash_info (HashInfo): hash to save.
         """
-
         if not isinstance(fs, LocalFileSystem):
             return
 
@@ -106,6 +108,36 @@ class State(StateBase):  # pylint: disable=too-many-instance-attributes
 
         self.hashes[path] = json.dumps(entry)
 
+    def save_batch(self, path, fs, hash_info): #add by zhoufang in 20230210
+        """Save hash for the specified path info.
+
+        Args:
+            path (str): path to save hash for.
+            hash_info (HashInfo): hash to save.
+        """
+
+        if not isinstance(fs, LocalFileSystem):
+            return
+
+        entry = {
+            "checksum": fs.checksum(path),
+            "size": fs.size(path),
+            "hash_info": hash_info.to_dict(),
+        }
+
+        key = path
+        value = json.dumps(entry)
+        self.hashes.set_batch(key=key, value=value)
+        
+    def commit_batch(self): #add by zhoufang in 20230210
+        """Save hash for the specified path info.
+
+        Args:
+            path (str): path to save hash for.
+            hash_info (HashInfo): hash to save.
+        """
+        self.hashes.commit()
+    
     def get(self, path, fs):
         """Gets the hash for the specified path info. Hash will be
         retrieved from the state database if available.
