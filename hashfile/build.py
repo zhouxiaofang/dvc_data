@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 from datetime import datetime
 import math
 from multiprocessing import Process, Manager, Pool
+from concurrent.futures import ProcessPoolExecutor
 from .istextfile import DEFAULT_CHUNK_SIZE, istextblock
 from .hash_info import HashInfo
 from dvc_objects.fs.callbacks import DEFAULT_CALLBACK, Callback, TqdmCallback
@@ -76,8 +77,9 @@ zfang_gol._init()
 zfang_gol.set_value("db_add_time", 0.0)
 zfang_gol.set_value("hash_file_time", 0.0)
 zfang_gol.set_value("other_db_time", 0.0)
-zfang_gol.set_value("file_meta", 0.0)
-zfang_gol.set_value("file_md5", 0.0)
+zfang_gol.set_value("hash_store", 0.0)
+zfang_gol.set_value("other_hash_store", 0.0)
+zfang_gol.set_value("sqlite_store", 0.0)
 def _build_file(path, fs, name, odb=None, upload_odb=None, dry_run=False):
     state = odb.state if odb else None
     meta, hash_info = hash_file(path, fs, name, state=state)
@@ -98,146 +100,7 @@ def _build_file(path, fs, name, odb=None, upload_odb=None, dry_run=False):
     # return meta, obj
     return meta, hash_info #测试代码20230117
 
-# start create by zhoufang, date 20230111
-class LargeFileHashingCallback(TqdmCallback):
-    """Callback that only shows progress bar if self.size > LARGE_FILE_SIZE."""
-
-    LARGE_FILE_SIZE = 2**30
-
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault("bytes", True)
-        super().__init__(*args, **kwargs)
-        self._logged = False
-        self.fname = kwargs.get("desc", "")
-
-    # TqdmCallback force renders progress bar on `set_size`.
-    set_size = Callback.set_size
-
-    def call(self, hook_name=None, **kwargs):
-        if self.size and self.size > self.LARGE_FILE_SIZE:
-            if not self._logged:
-                logger.info(
-                    f"Computing md5 for a large file '{self.fname}'. "
-                    "This is only done once."
-                )
-                self._logged = True
-            super().call()
-
-def get_hasher(name: str) -> "hashlib._Hash":
-    if name == "blake3":
-        from blake3 import blake3
-
-        return blake3(max_threads=blake3.AUTO)
-
-    try:
-        return getattr(hashlib, name)()
-    except AttributeError:
-        return hashlib.new(name)
-
-def dos2unix(data: bytes) -> bytes:
-    return data.replace(b"\r\n", b"\n")
-         
-class HashStreamFile(io.IOBase):
-    def __init__(
-        self,
-        fobj: BinaryIO,
-        hash_name: str = "md5",
-        text: Optional[bool] = None,
-    ) -> None:
-        self.fobj = fobj
-        self.total_read = 0
-        self.hasher = get_hasher(hash_name)
-        self.is_text: Optional[bool] = text
-        super().__init__()
-
-    def readable(self) -> bool:
-        return True
-
-    def tell(self) -> int:
-        return self.fobj.tell()
-
-    def read(self, n=-1) -> bytes:
-        chunk = self.fobj.read(n)
-        if self.is_text is None and chunk:
-            # do we need to buffer till the DEFAULT_CHUNK_SIZE?
-            self.is_text = istextblock(chunk[:DEFAULT_CHUNK_SIZE])
-
-        data = dos2unix(chunk) if self.is_text else chunk
-        self.hasher.update(data)
-        self.total_read += len(data)
-        return chunk
-
-    @property
-    def hash_value(self) -> str:
-        return self.hasher.hexdigest()
-
-    @property
-    def hash_name(self) -> str:
-        return self.hasher.name
-              
-def hash_file_speed(
-    path: "AnyFSPath",
-    fs: "FileSystem",
-    name: str,
-    state: "StateBase" = None,
-    callback: "Callback" = None,
-) -> Tuple["Meta", "HashInfo"]:
-    if state:
-        meta, hash_info = state.get(path, fs)
-        if hash_info:
-            return meta, hash_info
-
-    cb = callback or LargeFileHashingCallback(desc=path)
-    with cb:
-        meta = Meta.from_info(fs.info(path), fs.protocol)
-
-        value = getattr(meta, name, None)
-        if value:
-            assert not value.endswith(".dir")
-            return value, meta
-
-        if hasattr(fs, name):
-            func = getattr(fs, name)
-            return str(func(path)), meta
-
-        if name == "md5":
-            size = fs.size(path) or 0
-            cb.set_size(size)
-            with fs.open(path, "rb") as fobj:
-                chunk_size = 2**20
-                assert chunk_size >= DEFAULT_CHUNK_SIZE
-                stream = HashStreamFile(fobj, hash_name=name, text=None)
-                while True:
-                    data = stream.read(chunk_size)
-                    if not data:
-                        break
-                hash_value = stream.hash_value
-                hash_info = HashInfo(name, hash_value)
-                if state:
-                    assert ".dir" not in hash_info.value
-                    state.save(path, fs, hash_info)
-                return meta, hash_info
-
-def _build_file_speed(path, fs, name, odb=None, upload_odb=None, dry_run=False):
-    state = odb.state if odb else None
-    meta, hash_info = hash_file_speed(path, fs, name, state=state)
-    if upload_odb and not dry_run:
-        assert odb and name == "md5"
-        return _upload_file(path, fs, odb, upload_odb)
-
-    oid = hash_info.value
-    if dry_run:
-        obj = HashFile(path, fs, hash_info)
-    else:
-        odb.add(path, fs, oid, hardlink=False) #dvc数据库操作，log by zhoufang 20230111
-        obj = odb.get(oid)
-
-    return meta, obj
-# end create by zhoufang, date 20230111
-
-
-
-def slice_fnames(process_jobs, fnames_list ):  
+def slice_fnames(process_jobs, fnames_list ):  # add by zhoufang in 20230211
     fnames_list_length = len(fnames_list)
     n = process_jobs
     
@@ -306,7 +169,7 @@ def _build_tree(
             rel_key: Tuple[Optional[Any], ...] = ()
             if root != path:
                 rel_key = tuple(root[len(path) + 1 :].split(fs.sep))
-           
+                        
             # create 20230207, 多线程方案
             fnames_slice_list = slice_fnames(2, fnames)
             global_info_list = []
@@ -336,6 +199,7 @@ def _build_tree(
             t2 = datetime.now()
             print("_build_tree() 的单次for循环中,核心元数据计算 step  time=",(t2 - t1))
             # 本地数据库的插入元数据操作拆分出来，拆在如下for循环 
+            t_sqlite = 0.0
             if len(global_info_list) != 0:
                 t5 = datetime.now()
                 for (fname, meta, path, hash_info) in global_info_list:                 
@@ -346,9 +210,18 @@ def _build_tree(
                             break
                     if state: #dvc 源码
                         assert ".dir" not in hash_info.value
-                        state.save(path, fs, hash_info)      
+                        t3 = time.time()
+                        # state.save(path, fs, hash_info)  
+                        state.save_many(path, fs, hash_info) 
+                        t4 = time.time()  
+                        t_sqlite += (t4-t3)    
+                state.commit_many()
                 t6 = datetime.now()  
-                print("_build_tree() 的单次for循环中,核心元数据存储 step1 time=",(t6-t5))
+                print("_build_tree() 的for循环中,state.save的操作总时间      =", t_sqlite)
+                print("_build_tree() 的for循环中,state.save的other   sqlite3=", zfang_gol.get_value("hash_store"))
+                print("_build_tree() 的for循环中,state.save的数据插入 sqlite3=", zfang_gol.get_value("sqlite_store"))
+                
+                print("_build_tree() 的for循环中,核心元数据存储 step1 time=",(t6-t5))
                 t7 = datetime.now()   
                 for (fname, meta, path, hash_info) in global_info_list:
                     key = (*rel_key, fname)
@@ -358,7 +231,7 @@ def _build_tree(
                     
                     odb.add(path, fs, hash_info.value, hardlink=False) 
                 t8 = datetime.now()  
-                print("_build_tree() 的单次for循环中,核心元数据存储 step2 time=",(t8-t7))
+                print("_build_tree() 的for循环中,核心元数据存储 step2 time=",(t8-t7))
             print("\n")
             print("\n-----------------------\n")
 
