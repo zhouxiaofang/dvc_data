@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 from datetime import datetime
 import math
 from multiprocessing import Process, Manager, Pool
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from .istextfile import DEFAULT_CHUNK_SIZE, istextblock
 from .hash_info import HashInfo
 from dvc_objects.fs.callbacks import DEFAULT_CALLBACK, Callback, TqdmCallback
@@ -169,11 +169,12 @@ def _build_tree(
             rel_key: Tuple[Optional[Any], ...] = ()
             if root != path:
                 rel_key = tuple(root[len(path) + 1 :].split(fs.sep))
-                        
+                  
             # create 20230207, 多线程方案
-            fnames_slice_list = slice_fnames(2, fnames)
+            N = 2
+            fnames_slice_list = slice_fnames(N, fnames)
             global_info_list = []
-            t1 = datetime.now()
+            
             def target_func(fnames_list):
                 for fname in fnames_list: # add by zhoufang in 20230106,for循环可以并行加速遍历fnames
                     if fname == "":
@@ -187,50 +188,68 @@ def _build_tree(
                     )      
                     temTuple = (fname, meta, file_path, hash_info)
                     global_info_list.append(temTuple)
-                    
-            threads = []
-            for i in range(2):
-                t = threading.Thread(target=target_func, args=(fnames_slice_list[i],))
-                threads.append(t) 
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-            t2 = datetime.now()
-            print("_build_tree() 的单次for循环中,核心元数据计算 step  time=",(t2 - t1))
-            # 本地数据库的插入元数据操作拆分出来，拆在如下for循环 
-            t_sqlite = 0.0
-            if len(global_info_list) != 0:
-                t5 = datetime.now()
-                for (fname, meta, path, hash_info) in global_info_list:                 
-                    state = odb.state if odb else None
-                    if state:
-                        meta, db_hash_info = state.get(path, fs)
-                        if db_hash_info:
-                            break
-                    if state: #dvc 源码
-                        assert ".dir" not in hash_info.value
-                        t3 = time.time() 
-                        state.save_batch(path, fs, hash_info) 
-                        t4 = time.time()  
-                        t_sqlite += (t4-t3)    
-                state.commit_batch()
-                t6 = datetime.now()  
-                print("_build_tree() 的for循环中,state.save的操作总时间      =", t_sqlite)
-                print("_build_tree() 的for循环中,state.save的other   sqlite3=", zfang_gol.get_value("hash_store"))
-                print("_build_tree() 的for循环中,state.save的数据插入 sqlite3=", zfang_gol.get_value("sqlite_store"))
-                
-                print("_build_tree() 的for循环中,核心元数据存储 step1 time=",(t6-t5))
-                t7 = datetime.now()   
-                for (fname, meta, path, hash_info) in global_info_list:
-                    key = (*rel_key, fname)
-                    tree.add(key, meta, hash_info)
-                    tree_meta.size += meta.size or 0
-                    tree_meta.nfiles += 1
-                    
-                    odb.add(path, fs, hash_info.value, hardlink=False) 
-                t8 = datetime.now()  
-                print("_build_tree() 的for循环中,核心元数据存储 step2 time=",(t8-t7))
+
+            first_path = ""
+            if len(fnames) != 0:
+                first_path = f"{root}{fs.sep}{fnames[0]}"
+            
+            state = odb.state if odb else None
+            if state and first_path != "":
+                meta, db_hash_info = state.get(first_path, fs) #state缓存了目录区的数据
+                if db_hash_info == None:      
+                    t1 = datetime.now()
+                    threads = []
+                    for i in range(N):
+                        t = threading.Thread(target=target_func, args=(fnames_slice_list[i],))
+                        threads.append(t) 
+                    for t in threads:
+                        t.start()
+                    for t in threads:
+                        t.join()
+                    t2 = datetime.now()
+                    print("_build_tree() 的单次for循环中,核心元数据计算 step  time=",(t2 - t1))
+                    t_sqlite = 0.0
+                    # 本地数据库的插入元数据操作拆分出来，拆分如下for循环 
+                    if len(global_info_list) != 0:
+                        t5 = datetime.now()
+                        for (fname, meta, path, hash_info) in global_info_list:                   
+                            if state: #dvc 源码
+                                assert ".dir" not in hash_info.value
+                                t3 = time.time() 
+                                state.save_batch(path, fs, hash_info) 
+                                t4 = time.time()  
+                                t_sqlite += (t4-t3)    
+                        state.commit_batch()
+                        t6 = datetime.now()  
+                        print("_build_tree() 的for循环中,state.save的操作总时间   =", t_sqlite)
+                        print("_build_tree() 的for循环中,核心元数据存储 step1 time=",(t6-t5))
+                        t7 = datetime.now()   
+                        for (fname, meta, path, hash_info) in global_info_list:
+                            key = (*rel_key, fname)
+                            tree.add(key, meta, hash_info)
+                            tree_meta.size += meta.size or 0
+                            tree_meta.nfiles += 1
+                            
+                            odb.add(path, fs, hash_info.value, hardlink=False) 
+                        t8 = datetime.now()  
+                        print("_build_tree() 的for循环中,核心元数据存储 step2 time=",(t8-t7))
+                else:
+                    print("stage.commit() 中调用 build()....")
+                    for fname in fnames:
+                        path = f"{root}{fs.sep}{fname}"
+                        if fname == "":
+                            # NOTE: might happen with s3/gs/azure/etc, where empty
+                            # objects like `dir/` might be used to create an empty dir
+                            continue
+
+                        pbar.update()
+                        meta, hash_info = state.get(path, fs)
+
+                        key = (*rel_key, fname)
+                        tree.add(key, meta, hash_info)
+                        tree_meta.size += meta.size or 0
+                        tree_meta.nfiles += 1
+                        odb.add(path, fs, hash_info.value, hardlink=False) 
             print("\n")
             print("\n-----------------------\n")
 
@@ -295,20 +314,20 @@ def _build_tree(
 #             if root != path:
 #                 rel_key = tuple(root[len(path) + 1 :].split(fs.sep))
 
-#             for fname in fnames:
-#                 if fname == "":
-#                     # NOTE: might happen with s3/gs/azure/etc, where empty
-#                     # objects like `dir/` might be used to create an empty dir
-#                     continue
+            # for fname in fnames:
+            #     if fname == "":
+            #         # NOTE: might happen with s3/gs/azure/etc, where empty
+            #         # objects like `dir/` might be used to create an empty dir
+            #         continue
 
-#                 pbar.update()
-#                 meta, obj = _build_file(
-#                     f"{root}{fs.sep}{fname}", fs, name, odb=odb, **kwargs
-#                 )
-#                 key = (*rel_key, fname)
-#                 tree.add(key, meta, obj.hash_info)
-#                 tree_meta.size += meta.size or 0
-#                 tree_meta.nfiles += 1
+            #     pbar.update()
+            #     meta, obj = _build_file(
+            #         f"{root}{fs.sep}{fname}", fs, name, odb=odb, **kwargs
+            #     )
+            #     key = (*rel_key, fname)
+            #     tree.add(key, meta, obj.hash_info)
+            #     tree_meta.size += meta.size or 0
+            #     tree_meta.nfiles += 1
 
 #     tree.digest()
 #     tree = add_update_tree(odb, tree)
