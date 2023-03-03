@@ -62,8 +62,8 @@ def _remove(path, fs, in_cache, force=False, prompt=None):
             "Are you sure you want to proceed?"
         )
 
-        if prompt is None or not prompt(msg):
-            raise PromptError(path)
+        # if prompt is None or not prompt(msg): # delete by zhoufang in 20230303
+        #     raise PromptError(path)
 
     fs.remove(path)
 
