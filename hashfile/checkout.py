@@ -184,7 +184,7 @@ class DiffResult:
 def slice_keys(process_jobs, old_keys, new_keys ):  
     src_old_keys = list(old_keys)
     src_new_keys = list(new_keys)
-    print("开启的进程数目为：", process_jobs)
+    print("open process nums: ", process_jobs)
     old_length = len(src_old_keys)
     new_length = len(src_new_keys)
     n = process_jobs
@@ -194,14 +194,14 @@ def slice_keys(process_jobs, old_keys, new_keys ):
         one_thread_list = src_old_keys[math.floor(i / n * old_length): math.floor((i + 1) / n * old_length)]
         one_thread_set = set(one_thread_list)
         old_keys_list.append(one_thread_set)
-    print("主进程成功获取所有文件图片，old_keys_list写文件的切片数目：", len(old_keys_list))
+    print("old_keys_list slice nums:", len(old_keys_list))
     
     new_keys_list = []
     for j in range(n):
         one_slice_list = src_new_keys[math.floor(j / n * new_length): math.floor((j + 1) / n * new_length)]
         one_slice_set = set(one_slice_list)
         new_keys_list.append(one_slice_set)
-    print("主进程成功获取所有文件图片，new_keys_list写文件的切片数目：", len(new_keys_list))
+    print("new_keys_list slice nums: ", len(new_keys_list))
     
     return old_keys_list, new_keys_list
 
@@ -339,11 +339,11 @@ def speed_diff(
             return
     # 改进比对操作为目标函数，end create by zhoufang at 20221226
     
-    old_keys_slice_list, new_keys_slice_list = slice_keys(6, old_keys, new_keys) 
+    old_keys_slice_list, new_keys_slice_list = slice_keys(fs.jobs, old_keys, new_keys) 
           
-    print("odiff并行加速对比操作, starting ...")
+    print("update diff operation in processpools, starting ...")
     process_list = []
-    for i in range(6):
+    for i in range(fs.jobs):
         t = Process(target=target_func, args=(old_keys_slice_list[i], new_keys_slice_list[i], ))
         t.start()
         process_list.append(t) 
