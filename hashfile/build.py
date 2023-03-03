@@ -234,6 +234,8 @@ def _build_tree(
         
                     pbar.update()
                     meta, hash_info = state.get(path, fs)
+                    if meta == None:
+                        continue
         
                     key = (*rel_key, fname)
                     tree.add(key, meta, hash_info)
